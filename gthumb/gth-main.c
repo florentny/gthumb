@@ -1257,7 +1257,10 @@ gth_main_activate_extensions (void)
 
 	for (i = 0; mandatory_extensions[i] != NULL; i++) {
 		if (! gth_extension_manager_activate (Main->priv->extension_manager, mandatory_extensions[i], &error)) {
-			g_warning ("Could not load the '%s' extension: %s", mandatory_extensions[i], error->message);
+			if(error != NULL)
+                             g_warning ("Could not load the '%s' extension: %s", mandatory_extensions[i], error->message);
+                        else
+                             g_warning ("Could not load the '%s' extension: %s", mandatory_extensions[i], "");
 			g_clear_error (&error);
 		}
 	}
