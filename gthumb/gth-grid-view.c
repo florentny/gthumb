@@ -91,13 +91,6 @@ typedef enum {
 } SyncType;
 
 
-typedef enum {
-	ITEM_STYLE_ICON,
-	ITEM_STYLE_IMAGE,
-	ITEM_STYLE_VIDEO
-} ItemStyle;
-
-
 static guint grid_view_signals[LAST_SIGNAL] = { 0 };
 
 
@@ -111,6 +104,7 @@ typedef struct {
 	char                  *caption;
 	gboolean               is_image : 1;
 	gboolean               is_video : 1;
+	gboolean               has_alpha : 1;
 	ItemStyle	       style;
 
 	/* item state */
@@ -253,10 +247,12 @@ gth_grid_view_item_set_thumbnail (GthGridViewItem *item,
 	if (item->thumbnail != NULL) {
 		item->pixbuf_area.width = cairo_image_surface_get_width (item->thumbnail);
 		item->pixbuf_area.height = cairo_image_surface_get_height (item->thumbnail);
+		item->has_alpha = _cairo_image_surface_get_has_alpha (item->thumbnail);
 	}
 	else {
 		item->pixbuf_area.width = 0;
 		item->pixbuf_area.height = 0;
+		item->has_alpha = FALSE;
 	}
 
 	item->pixbuf_area.x = item->thumbnail_area.x  + ((item->thumbnail_area.width - item->pixbuf_area.width) / 2);
@@ -657,6 +653,7 @@ _gth_grid_view_update_item_size (GthGridView     *self,
 	thumbnail_size = self->priv->cell_size - (self->priv->cell_padding * 2);
 
 	if (item->is_icon
+	    || item->has_alpha
 	    || ((item->pixbuf_area.width < self->priv->thumbnail_size) && (item->pixbuf_area.height < self->priv->thumbnail_size))
             || (item->file_data == NULL))
 	{
@@ -1299,35 +1296,6 @@ gth_grid_view_get_last_visible (GthFileView *file_view)
 /* -- gth_grid_view_draw -- */
 
 
-static cairo_pattern_t *
-_cairo_film_pattern_create (void)
-{
-	static cairo_pattern_t *film_pattern = NULL;
-	cairo_pattern_t        *pattern;
-	static GMutex           mutex;
-
-	g_mutex_lock (&mutex);
-	if (film_pattern == NULL) {
-		char            *filename;
-		cairo_surface_t *surface;
-
-		filename = g_build_filename (GTHUMB_ICON_DIR, "filmholes.png", NULL);
-		surface = cairo_image_surface_create_from_png (filename);
-		film_pattern = cairo_pattern_create_for_surface (surface);
-		cairo_pattern_set_filter (film_pattern, CAIRO_FILTER_GOOD);
-		cairo_pattern_set_extend (film_pattern, CAIRO_EXTEND_REPEAT);
-
-		cairo_surface_destroy (surface);
-		g_free (filename);
-
-	}
-	pattern = cairo_pattern_reference (film_pattern);
-	g_mutex_unlock (&mutex);
-
-	return pattern;
-}
-
-
 static void
 _gth_grid_view_item_draw_thumbnail (GthGridViewItem *item,
 				    cairo_t         *cr,
@@ -1394,63 +1362,21 @@ _gth_grid_view_item_draw_thumbnail (GthGridViewItem *item,
 
 		/* ...draw a frame with a drop-shadow effect */
 
-		cairo_save (cr);
-		cairo_translate (cr, 0.5, 0.5);
-		cairo_set_line_width (cr, 0.5);
-		cairo_set_antialias (cr, CAIRO_ANTIALIAS_NONE);
-
-		frame_rect = item->thumbnail_area;
-
-		/* the drop shadow */
-
-		cairo_set_source_rgba (cr, 0.0, 0.0, 0.0, 0.33);
-		_cairo_draw_rounded_box (cr,
-					 frame_rect.x + 2,
-					 frame_rect.y + 2,
-					 frame_rect.width - 1,
-					 frame_rect.height - 1,
-					 0);
-		cairo_fill (cr);
-
-		/* the outer frame */
-
-		cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
-		_cairo_draw_rounded_box (cr,
-					 frame_rect.x,
-					 frame_rect.y,
-					 frame_rect.width - 1,
-					 frame_rect.height - 1,
-					 0);
-		cairo_fill_preserve (cr);
-
-		cairo_set_source_rgba (cr, 0.0, 0.0, 0.0, 0.55);
-		cairo_stroke (cr);
-
-		cairo_restore (cr);
+		_cairo_draw_thumbnail_frame (cr,
+					     item->thumbnail_area.x,
+					     item->thumbnail_area.y,
+					     item->thumbnail_area.width,
+					     item->thumbnail_area.height);
 	}
 
 	if (item->style == ITEM_STYLE_VIDEO) {
 		frame_rect = item->thumbnail_area;
 
-		/* the drop shadow */
-
-		cairo_set_source_rgba (cr, 0.0, 0.0, 0.0, 0.33);
-		cairo_rectangle (cr,
-				 frame_rect.x + 2,
-				 frame_rect.y + 2,
-				 frame_rect.width,
-				 frame_rect.height);
-		cairo_fill (cr);
-
-		/* dark background */
-
-		cairo_set_source_rgb (cr, 0.1, 0.1, 0.1);
-		cairo_rectangle (cr,
-				 frame_rect.x,
-				 frame_rect.y ,
-				 frame_rect.width,
-				 frame_rect.height);
-		cairo_fill (cr);
+		_cairo_draw_film_background (cr,
+					     item->thumbnail_area.x,
+					     item->thumbnail_area.y,
+					     item->thumbnail_area.width,
+					     item->thumbnail_area.height);
 	}
 
 	/* thumbnail */
@@ -1460,51 +1386,12 @@ _gth_grid_view_item_draw_thumbnail (GthGridViewItem *item,
 	cairo_fill (cr);
 
 	if (item->style == ITEM_STYLE_VIDEO) {
-		cairo_pattern_t *pattern;
-		double           x;
-		double           film_scale;
-		cairo_matrix_t   matrix;
-		double           film_strip;
-
-		/* left film strip */
-
-		pattern = _cairo_film_pattern_create ();
-
-		if (grid_view->priv->thumbnail_size > 128)
-			film_scale = 256.0 / grid_view->priv->thumbnail_size;
-		else
-			film_scale = 128.0 / grid_view->priv->thumbnail_size;
-		film_strip = 9.0 / film_scale;
-
-		x = frame_rect.x;
-		cairo_matrix_init_identity (&matrix);
-		cairo_matrix_scale (&matrix, film_scale, film_scale);
-		cairo_matrix_translate (&matrix, -frame_rect.x, -item->pixbuf_area.y);
-		cairo_pattern_set_matrix (pattern, &matrix);
-		cairo_set_source (cr, pattern);
-		cairo_rectangle (cr,
-				 x,
-				 frame_rect.y,
-				 film_strip,
-				 frame_rect.height);
-		cairo_fill (cr);
-
-		/* right film strip */
-
-		x = frame_rect.x + item->pixbuf_area.width - film_strip;
-		cairo_matrix_init_identity (&matrix);
-		cairo_matrix_scale (&matrix, film_scale, film_scale);
-		cairo_matrix_translate (&matrix, -x, -item->pixbuf_area.y);
-		cairo_pattern_set_matrix (pattern, &matrix);
-		cairo_set_source (cr, pattern);
-		cairo_rectangle (cr,
-				 x,
-				 frame_rect.y,
-				 film_strip,
-				 frame_rect.height);
-		cairo_fill (cr);
-
-		cairo_pattern_destroy (pattern);
+		_cairo_draw_film_foreground (cr,
+					     item->thumbnail_area.x,
+					     item->thumbnail_area.y,
+					     item->thumbnail_area.width,
+					     item->thumbnail_area.height,
+					     grid_view->priv->thumbnail_size);
 	}
 
 	if ((item_state & GTK_STATE_FLAG_SELECTED) || (item_state & GTK_STATE_FLAG_FOCUSED)) {
@@ -2501,13 +2388,13 @@ gth_grid_view_set_model (GthFileView  *file_view,
 
 
 static int
-gth_grid_view_get_at_position (GthFileView *file_view,
-			       int          x,
-			       int          y)
+_gth_grid_view_get_at_position (GthGridView      *self,
+			        int               x,
+			        int               y,
+			        GthGridViewItem **item_ref)
 {
-	GthGridView *self = GTH_GRID_VIEW (file_view);
-	GList       *scan;
-	int          n;
+	GList *scan;
+	int    n;
 
 	for (scan = self->priv->items, n = 0;
 	     scan != NULL;
@@ -2518,11 +2405,25 @@ gth_grid_view_get_at_position (GthFileView *file_view,
 		if (_cairo_rectangle_contains_point (&item->thumbnail_area, x, y)
 		    || _cairo_rectangle_contains_point (&item->caption_area, x, y))
 		{
+			if (item_ref != NULL)
+				*item_ref = item;
 			return n;
 		}
 	}
 
+	if (item_ref != NULL)
+		*item_ref = NULL;
+
 	return -1;
+}
+
+
+static int
+gth_grid_view_get_at_position (GthFileView     *file_view,
+			       int               x,
+			       int               y)
+{
+	return _gth_grid_view_get_at_position (GTH_GRID_VIEW (file_view), x, y, NULL);
 }
 
 
@@ -2845,9 +2746,10 @@ static int
 gth_grid_view_button_press (GtkWidget      *widget,
 			    GdkEventButton *event)
 {
-	GthGridView *self = GTH_GRID_VIEW (widget);
-	int          retval = FALSE;
-	int          pos;
+	GthGridView *    self = GTH_GRID_VIEW (widget);
+	int              retval = FALSE;
+	int              pos;
+	GthGridViewItem *item;
 
 	if (event->window != self->priv->bin_window)
 		return FALSE;
@@ -2855,7 +2757,7 @@ gth_grid_view_button_press (GtkWidget      *widget,
 	if (! gtk_widget_has_focus (widget))
 		gtk_widget_grab_focus (widget);
 
-	pos = gth_grid_view_get_at_position (GTH_FILE_VIEW (self), event->x, event->y);
+	pos = _gth_grid_view_get_at_position (self, event->x, event->y, &item);
 
 	if ((pos != -1) && (event->button == 1) && (event->type == GDK_2BUTTON_PRESS)) {
 		/* Double click activates the item */
@@ -2898,9 +2800,6 @@ gth_grid_view_button_press (GtkWidget      *widget,
 		}
 
 		if (self->priv->selection_mode != GTK_SELECTION_NONE) {
-			GthGridViewItem *item;
-
-			item = g_list_nth (self->priv->items, pos)->data;
 			if (self->priv->selection_mode == GTK_SELECTION_MULTIPLE)
 				_gth_grid_view_select_multiple (self, item, pos, event);
 			else
@@ -3192,15 +3091,17 @@ gth_grid_view_motion_notify (GtkWidget      *widget,
 						 event->x,
 						 event->y))
 		{
-			int             pos;
-			GdkDragContext *context;
-			gboolean        multi_dnd;
+			GthGridViewItem *item;
+			int              pos;
+			GdkDragContext  *context;
+			gboolean         multi_dnd;
 
 			/**/
 
-			pos = gth_grid_view_get_at_position (GTH_FILE_VIEW (self),
-							     self->priv->drag_start_x,
-							     self->priv->drag_start_y);
+			pos = _gth_grid_view_get_at_position (self,
+							      self->priv->drag_start_x,
+							      self->priv->drag_start_y,
+							      &item);
 			if (pos != -1)
 				gth_file_view_set_cursor (GTH_FILE_VIEW (self), pos);
 
@@ -3219,12 +3120,24 @@ gth_grid_view_motion_notify (GtkWidget      *widget,
 								   -1,
 								   -1);
 
-			/* FIXME: create a cool drag icon here */
 			multi_dnd = self->priv->selection->next != NULL;
-			gtk_drag_set_icon_name (context,
-						multi_dnd ? "emblem-documents-symbolic" : "folder-documents-symbolic",
-						-4,
-						-4);
+
+			if ((pos != -1) && (item != NULL) && (item->thumbnail != NULL)) {
+				cairo_surface_t *icon = _cairo_create_dnd_icon (item->thumbnail,
+										self->priv->thumbnail_size,
+										item->style,
+										multi_dnd);
+				cairo_surface_set_device_offset (icon,
+								 item->thumbnail_area.x - event->x,
+								 item->thumbnail_area.y - event->y);
+				gtk_drag_set_icon_surface (context, icon);
+				cairo_surface_destroy (icon);
+			}
+			else
+				gtk_drag_set_icon_name (context,
+							multi_dnd ? "emblem-documents-symbolic" : "folder-documents-symbolic",
+							-4,
+							-4);
 		}
 
 		return TRUE;
@@ -3637,7 +3550,7 @@ _gth_grid_view_set_thumbnail_size (GthGridView *self,
 	self->priv->update_caption_height = TRUE;
 	g_object_notify (G_OBJECT (self), "thumbnail-size");
 
-	_gth_grid_view_queue_relayout (self);
+	gtk_widget_queue_resize (GTK_WIDGET (self));
 }
 
 

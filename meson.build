@@ -1,6 +1,6 @@
 project('gthumb', ['c', 'cpp'],
   license : 'GPL2+',
-  version : '3.7.1',
+  version : '3.8.0',
   meson_version : '>=0.42.1'
 )
 
@@ -32,8 +32,8 @@ c_comp = meson.get_compiler('c')
 prefix = get_option('prefix')
 datadir = join_paths(prefix, get_option('datadir'))
 pkgdatadir = join_paths(datadir, meson.project_name())
-pkgincludedir = join_paths(prefix, 'include', meson.project_name())
-pkglibdir = join_paths(prefix, 'lib', meson.project_name())
+pkgincludedir = join_paths(prefix, get_option('includedir'), meson.project_name())
+pkglibdir = join_paths(prefix, get_option('libdir'), meson.project_name())
 po_dir = join_paths(meson.source_root(), 'po')
 extensions_install_dir = join_paths(pkglibdir, 'extensions')
 ui_install_dir = join_paths(pkgdatadir, 'ui')

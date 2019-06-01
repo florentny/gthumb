@@ -41,6 +41,7 @@
 			       * delay use this delay instead. */
 #define STEP_INCREMENT  20.0  /* Scroll increment. */
 #define BLACK_VALUE 0.2
+#define CHECKED_PATTERN_SIZE 20
 
 
 enum {
@@ -72,6 +73,7 @@ struct _GthImageViewerPrivate {
 
 	GthImage               *image;
 	cairo_surface_t        *surface;
+	cairo_pattern_t        *background_pattern;
 	GdkPixbufAnimation     *animation;
 	int                     original_width;
 	int                     original_height;
@@ -175,6 +177,7 @@ gth_image_viewer_finalize (GObject *object)
 	_g_clear_object (&self->priv->iter);
 	_cairo_clear_surface (&self->priv->iter_surface);
 	_cairo_clear_surface (&self->priv->surface);
+	cairo_pattern_destroy (self->priv->background_pattern);
 
 	G_OBJECT_CLASS (gth_image_viewer_parent_class)->finalize (object);
 }
@@ -860,6 +863,17 @@ gth_image_viewer_button_press (GtkWidget      *widget,
 	return retval;
 }
 
+static void
+_gth_image_viewer_button_release (GthImageViewer *self,
+		 	 	  GdkEventButton *event)
+{
+	gth_image_viewer_tool_button_release (self->priv->tool, event);
+
+	self->priv->just_focused = FALSE;
+	self->pressed = FALSE;
+	self->dragging = FALSE;
+}
+
 
 static gboolean
 gth_image_viewer_button_release (GtkWidget      *widget,
@@ -877,11 +891,7 @@ gth_image_viewer_button_release (GtkWidget      *widget,
 			       0);
 	}
 
-	gth_image_viewer_tool_button_release (self->priv->tool, event);
-
-	self->priv->just_focused = FALSE;
-	self->pressed = FALSE;
-	self->dragging = FALSE;
+	_gth_image_viewer_button_release (self, event);
 
 	return FALSE;
 }
@@ -1004,6 +1014,19 @@ gth_image_viewer_scroll_event (GtkWidget      *widget,
 	}
 
 	return retval;
+}
+
+
+static void
+gth_image_viewer_drag_end (GtkWidget      *widget,
+			   GdkDragContext *context)
+{
+	GthImageViewer *self;
+
+	g_return_if_fail (GTH_IS_IMAGE_VIEWER (widget));
+
+	self = GTH_IMAGE_VIEWER (widget);
+	_gth_image_viewer_button_release (self, NULL);
 }
 
 
@@ -1352,6 +1375,7 @@ gth_image_viewer_class_init (GthImageViewerClass *class)
 	widget_class->button_release_event = gth_image_viewer_button_release;
 	widget_class->motion_notify_event = gth_image_viewer_motion_notify;
 	widget_class->scroll_event = gth_image_viewer_scroll_event;
+	widget_class->drag_end = gth_image_viewer_drag_end;
 
 	class->clicked      = NULL;
 	class->zoom_changed = NULL;
@@ -1518,6 +1542,7 @@ gth_image_viewer_init (GthImageViewer *self)
 
 	self->priv = gth_image_viewer_get_instance_private (self);
 
+	self->priv->background_pattern = _cairo_create_checked_pattern (CHECKED_PATTERN_SIZE);
 	self->priv->is_animation = FALSE;
 	self->priv->play_animation = TRUE;
 	self->priv->cursor_visible = TRUE;
@@ -2660,7 +2685,7 @@ gth_image_viewer_paint_frame (GthImageViewer *self,
 
 	/* background */
 
-	cairo_set_source_rgba (cr, 1.0, 1.0, 1.0, 1.0);
+	cairo_set_source (cr, self->priv->background_pattern);
 	cairo_rectangle (cr,
 			 self->image_area.x,
 			 self->image_area.y,
